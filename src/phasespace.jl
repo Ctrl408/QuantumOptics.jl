@@ -112,8 +112,8 @@ function wigner(rho::Operator{B,B}, x, y) where B<:FockBasis
     N0 = b.offset
     _2α = complex(x, y)*sqrt(2)
     abs2_2α = abs2(_2α)
-    w = complex(0.)
-    coefficient = complex(0.)
+    w = zero(Complex{real(eltype(rho))})
+    coefficient = zero(Complex{real(eltype(rho))})
     @inbounds for L=N:-1:1
         coefficient = 2*_clenshaw(L, abs2_2α, rho.data, N, N0)
         w = coefficient + w*_2α/sqrt(L+1)
@@ -248,7 +248,7 @@ function _clenshaw(L::Integer, abs2_2α::Real, ρ, N::Integer, offset::Integer)
         f1 = sqrt(float((n+L)*n))
         f0_ = 1/f0
         f1_ = 1/f1
-        b2 = complex(0.)
+        b2 = zero(Complex{real(eltype(rho))})
         if n < offset
             b1 = zero(eltype(ρ))
         else
