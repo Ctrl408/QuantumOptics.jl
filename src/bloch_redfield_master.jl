@@ -15,6 +15,8 @@ See QuTiP's documentation (http://qutip.org/docs/latest/guide/dynamics/dynamics-
 * `secular_cutoff=0.1`: Cutoff to allow a degree of partial secularization. Terms are discarded if they are greater than (dw\\_min * secular cutoff) where dw\\_min is the smallest (non-zero) difference between any two eigenenergies of H.
                         This argument is only taken into account if use_secular=true.
 """
+
+import SciMLBase
 # Use a generic AbstractOperator vector to support Dual-number operators
 function bloch_redfield_tensor(H::AbstractOperator, a_ops; J=AbstractOperator[], use_secular=true, secular_cutoff=0.1)
     _check_const(H)
