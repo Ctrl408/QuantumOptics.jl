@@ -15,11 +15,12 @@ See QuTiP's documentation (http://qutip.org/docs/latest/guide/dynamics/dynamics-
 * `secular_cutoff=0.1`: Cutoff to allow a degree of partial secularization. Terms are discarded if they are greater than (dw\\_min * secular cutoff) where dw\\_min is the smallest (non-zero) difference between any two eigenenergies of H.
                         This argument is only taken into account if use_secular=true.
 """
-function bloch_redfield_tensor(H::AbstractOperator, a_ops; J=SparseOpType[], use_secular=true, secular_cutoff=0.1)
+# Use a generic AbstractOperator vector to support Dual-number operators
+function bloch_redfield_tensor(H::AbstractOperator, a_ops; J=AbstractOperator[], use_secular=true, secular_cutoff=0.1)
     _check_const(H)
     _check_const.(J)
     # Use the energy eigenbasis
-    H_evals, transf_mat = eigen(Array(H.data)) #Array call makes sure H is a dense array
+    H_evals, transf_mat = eigen(dense(H).data) #Array call makes sure H is a dense array
     H_ekets = [Ket(H.basis_l, transf_mat[:, i]) for i in 1:length(H_evals)]
 
     #Define function for transforming to Hamiltonian eigenbasis
@@ -139,7 +140,8 @@ function master_bloch_redfield(tspan,
     # rho as Ket and L as DataOperator
     basis_comp = rho0.basis_l^2
     rho0_eb = Ket(basis_comp, (inv_transf_op * rho0 * transf_op).data[:]) #Transform to H eb and convert to Ket
-    L_ = isa(L, SparseSuperOpType) ? SparseOperator(basis_comp, L.data) : DenseOperator(basis_comp, L.data)
+    # Check the underlying data structure rather than a rigid type alias
+    L_ = L.data isa AbstractSparseMatrix ? SparseOperator(basis_comp, L.data) : DenseOperator(basis_comp, L.data)
 
     # Derivative function
     dmaster_br_(t, rho, drho) = dmaster_br(drho, rho, L_)
