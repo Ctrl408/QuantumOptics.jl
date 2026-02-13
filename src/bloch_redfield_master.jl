@@ -68,7 +68,7 @@ function bloch_redfield_tensor(H::AbstractOperator, a_ops; J=SparseOpType[], use
     end
 
     #Initialize R_abcd array
-    data = zeros(ComplexF64, N, N, N, N)
+    data = zeros(eltype(transf_mat), N, N, N, N)
     #Loop through all indices and calculate elements - seems to be as efficient as any fancy broadcasting implementation (and much simpler to read)
     Threads.@threads for idx in CartesianIndices(data)
 
