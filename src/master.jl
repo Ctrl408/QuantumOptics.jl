@@ -239,9 +239,7 @@ end
 # Non-hermitian Hamiltonian
 function nh_hamiltonian(H,J,Jdagger,::Nothing)
     Hnh = copy(H)
-    for i=1:length(J)
-        Hnh -= complex(float(eltype(H)))(0.5im)*Jdagger[i]*J[i]
-    end
+    Hnh -= 0.5im * sum(Jdagger[i] * J[i] for i in 1:length(J))
     return Hnh
 end
 function nh_hamiltonian(H,J,Jdagger,rates::AbstractVector)
