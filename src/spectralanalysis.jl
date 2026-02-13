@@ -131,13 +131,24 @@ function that does the diagonalization (like `KrylovKit.eigsolve`).
 """
 function eigenstates(op::Operator, ds::LapackDiag; warning=true)
     b = basis(op)
+    data = op.data
     if ishermitian(op)
-        D, V = eigen(Hermitian(op.data), 1:ds.n)
-        states = [Ket(b, V[:, k]) for k=1:length(D)]
-        return D, states
+        # Check if we are in an AD context (ForwardDiff.Dual numbers)
+        if eltype(data) <: ForwardDiff.Dual
+            # GenericLinearAlgebra requires a full decomposition for Duals
+            D, V = eigen(Hermitian(data))
+            # Slice results to match the requested number of states n
+            n_eff = min(ds.n, length(D))
+            return D[1:n_eff], [Ket(b, V[:, k]) for k=1:n_eff]
+        else
+            # Standard fast LAPACK path for non-AD usage
+            D, V = eigen(Hermitian(data), 1:ds.n)
+            states = [Ket(b, V[:, k]) for k=1:length(D)]
+            return D, states
+        end
     else
         warning && @warn(nonhermitian_warning)
-        D, V = eigen(op.data)
+        D, V = eigen(data)
         states = [Ket(b, V[:, k]) for k=1:length(D)]
         perm = sortperm(D, by=real)
         permute!(D, perm)
@@ -175,12 +186,19 @@ end
 eigenenergies(op::AbstractOperator, n::Int; kw...) = eigenenergies(op; kw..., n=n)
 
 function eigenenergies(op::Operator, ds::LapackDiag; warning=true)
+    data = op.data
     if ishermitian(op)
-        D = eigvals(Hermitian(op.data), 1:ds.n)
-        return D
+        if eltype(data) <: ForwardDiff.Dual
+            D = eigvals(Hermitian(data))
+            n_eff = min(ds.n, length(D))
+            return D[1:n_eff]
+        else
+            D = eigvals(Hermitian(data), 1:ds.n)
+            return D
+        end
     else
         warning && @warn(nonhermitian_warning)
-        D = eigvals(op.data)
+        D = eigvals(data)
         sort!(D, by=real)
         return D[1:ds.n]
     end
@@ -230,8 +248,8 @@ function simdiag(ops::Vector{<:AbstractOperator}; atol::Real=1e-14, rtol::Real=1
         combined_data = Array(combined_data)
     end
     
-    # Use Hermitian to ensure real eigenvalues and improved AD stability
-    # Ensure GenericLinearAlgebra is loaded for Dual support
+    # Use Hermitian for real eigenvalues and AD stability.
+    # Requires 'using GenericLinearAlgebra' to be active.
     d, v = eigen(Hermitian(combined_data))
 
     # Initialize evals using d to preserve Dual types from the result of eigen()
@@ -239,12 +257,17 @@ function simdiag(ops::Vector{<:AbstractOperator}; atol::Real=1e-14, rtol::Real=1
     
     for i=1:length(ops)
         op_data = ops[i].data
-        # Use real.() to strip tiny imaginary parts from the transformation
+        # Use real.() to prevent Complex{Dual} -> Real{Dual} conversion errors
         evals[i] .= real.(diag(v' * op_data * v))
         
         # Internal verification check
-        if !isapprox(op_data * v, v * diagm(evals[i]); atol=atol, rtol=rtol)
-            error("Simultaneous diagonalization failed!")
+        # AD FIX: Compare values only to avoid crashes from noisy derivatives
+        val_check = isapprox(ForwardDiff.value.(op_data * v), 
+                             ForwardDiff.value.(v * diagm(evals[i])); 
+                             atol=atol, rtol=rtol)
+        
+        if !val_check
+            error("Simultaneous diagonalization failed! Operators may not commute.")
         end
     end
 
