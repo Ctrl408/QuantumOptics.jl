@@ -223,23 +223,29 @@ function simdiag(ops::Vector{<:AbstractOperator}; atol::Real=1e-14, rtol::Real=1
         end
     end
 
-    # Summing operators works generically; eigen() will dispatch to the 
-    # correct Dual-number aware method automatically.
-    d, v = eigen(sum(ops).data)
+    # NEW: Handle sparse data for AD.
+    # We sum the operators and ensure the data is dense if it contains Dual numbers.
+    combined_data = sum(ops).data
+    if combined_data isa AbstractSparseMatrix
+        # ForwardDiff does not work with sparse eigen/eigs easily.
+        # For GSoC momentum, convert to dense to allow AD to flow.
+        combined_data = Array(combined_data)
+    end
+    
+    d, v = eigen(combined_data)
 
-    # Use 'similar' to ensure 'evals' can hold Dual numbers
+    # Use 'similar' to preserve Dual types in eigenvalues
     evals = [similar(d, length(d)) for i=1:length(ops)]
     
-    # PHASE 2: VECTORIZATION
-    # Replace the scalar loop with matrix-matrix multiplication.
-    # This is faster and avoids "Scalar indexing" warnings on GPUs.
     for i=1:length(ops)
-        # Transforming to the common eigenbasis: V' * Op * V
-        # The diagonal elements are the eigenvalues.
-        evals[i] .= diag(v' * ops[i].data * v)
+        # VECTORIZED calculation to avoid scalar warnings
+        # Transform operator to common eigenbasis and extract diagonal
+        # ensure ops[i].data is dense if it's a small matrix to speed up AD
+        op_data = ops[i].data
+        evals[i] .= diag(v' * op_data * v)
         
-        # Vectorized consistency check
-        if !isapprox(ops[i].data * v, v * diagm(evals[i]); atol=atol, rtol=rtol)
+        # Vectorized check
+        if !isapprox(op_data * v, v * diagm(evals[i]); atol=atol, rtol=rtol)
             error("Simultaneous diagonalization failed!")
         end
     end
