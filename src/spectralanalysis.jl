@@ -228,11 +228,10 @@ function simdiag(ops::Vector{<:AbstractOperator}; atol::Real=1e-14, rtol::Real=1
     # We sum the operators and ensure the data is dense if it contains Dual numbers.
     combined_data = sum(ops).data
     if combined_data isa AbstractSparseMatrix
-        # ForwardDiff does not work with sparse eigen/eigs easily.
-        # For GSoC momentum, convert to dense to allow AD to flow.
+    # ForwardDiff does not work with sparse eigen/eigs easily.
+    # For GSoC momentum, convert to dense to allow AD to flow.
         combined_data = Array(combined_data)
-    end
-    
+    end    
     d, v = eigen(combined_data)
 
     # Use 'similar' to preserve Dual types in eigenvalues
