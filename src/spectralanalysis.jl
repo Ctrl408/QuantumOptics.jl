@@ -214,35 +214,31 @@ the equation ``A|ψ⟩ = a|ψ⟩``.
 
 # Change this signature:
 # function simdiag(ops::Vector{T}; atol::Real=1e-14, rtol::Real=1e-14) where T<:DenseOpType
-
-# To this more generic signature:
 function simdiag(ops::Vector{<:AbstractOperator}; atol::Real=1e-14, rtol::Real=1e-14)
-    # Check input
     for A=ops
         if !ishermitian(A)
             error("Non-hermitian operator given!")
         end
     end
 
-    # NEW: Handle sparse data for AD.
-    # We sum the operators and ensure the data is dense if it contains Dual numbers.
-    combined_data = sum(ops).data
+    # 1. Use a generator to ensure proper type promotion during summation
+    combined_data = sum(op.data for op in ops)
+    
     if combined_data isa AbstractSparseMatrix
-    # ForwardDiff does not work with sparse eigen/eigs easily.
-    # For GSoC momentum, convert to dense to allow AD to flow.
         combined_data = Array(combined_data)
-    end    
-    d, v = eigen(combined_data)
+    end
+    
+    # 2. Use Hermitian to ensure real eigenvalues and better AD support
+    # Ensure 'using GenericLinearAlgebra' is active for Dual support
+    d, v = eigen(Hermitian(combined_data))
 
-    # Use 'similar' to preserve Dual types in eigenvalues
-    evals = [similar(d, length(d)) for i=1:length(ops)]
+    # 3. Initialize evals based on d (which will now be Dual if inputs are Dual)
+    evals = [similar(d) for _ in ops]
     
     for i=1:length(ops)
-        # VECTORIZED calculation to avoid scalar warnings
-        # Transform operator to common eigenbasis and extract diagonal
-        # ensure ops[i].data is dense if it's a small matrix to speed up AD
         op_data = ops[i].data
-        evals[i] .= diag(v' * op_data * v)
+        # 4. Use real.() to prevent Complex{Dual} -> Real{Dual} conversion errors
+        evals[i] .= real.(diag(v' * op_data * v))
         
         # Vectorized check
         if !isapprox(op_data * v, v * diagm(evals[i]); atol=atol, rtol=rtol)
