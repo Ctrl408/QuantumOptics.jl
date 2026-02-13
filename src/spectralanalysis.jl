@@ -219,11 +219,12 @@ function simdiag(ops::Vector{T}; atol::Real=1e-14, rtol::Real=1e-14) where T<:De
 
     d, v = eigen(sum(ops).data)
 
+   # 1. Allocate generically using similar
     evals = [similar(d, length(d)) for i=1:length(ops)]
-    for i=1:length(ops), j=1:length(d)
-        vec = ops[i].data*v[:, j]
-        evals[i][j] = (v[:, j]'*vec)[1]
-        if !isapprox(vec, evals[i][j]*v[:, j]; atol=atol, rtol=rtol)
+
+    for i=1:length(ops)
+        evals[i] .= diag(v' * ops[i].data * v)
+        if !isapprox(ops[i].data * v, v * diagm(evals[i]); atol=atol, rtol=rtol)
             error("Simultaneous diagonalization failed!")
         end
     end
