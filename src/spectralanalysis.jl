@@ -219,7 +219,7 @@ function simdiag(ops::Vector{T}; atol::Real=1e-14, rtol::Real=1e-14) where T<:De
 
     d, v = eigen(sum(ops).data)
 
-    evals = [Vector{ComplexF64}(undef, length(d)) for i=1:length(ops)]
+    evals = [similar(d, length(d)) for i=1:length(ops)]
     for i=1:length(ops), j=1:length(d)
         vec = ops[i].data*v[:, j]
         evals[i][j] = (v[:, j]'*vec)[1]
