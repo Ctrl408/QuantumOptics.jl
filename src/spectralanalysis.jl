@@ -2,6 +2,7 @@ using Arpack
 import KrylovKit: eigsolve
 import SciMLBase
 import ForwardDiff
+using SparseArrays, LinearAlgebra
 
 const nonhermitian_warning = "The given operator is not hermitian. If this is due to a numerical error make the operator hermitian first by calculating (x+dagger(x))/2 first."
 
@@ -41,12 +42,12 @@ end
 Parameters:
 - `n`: The number of eigenvectors to find
 - `v0`: The starting vector. By default it is `nothing`, which means it will be a random dense
-`Vector`. This will not work for non-trivial array types like from `CUDA.jl`, so you might want
-to define a new method for the `QuantumOptics.get_starting_vector` function.
+`Vector`.
 - `krylovdim`: The upper bound for dimension count of the emerging Krylov space.
 """
 KrylovDiag(n::Int, v0=nothing) = KrylovDiag(n, v0, n + 30)
-Base.print(io::IO, kds::KrylovDiag) = print(io, "KrylovDiag($(kds.n))")
+Base.print(io::IO, kds::KrylovDiag) =
+    print(io, "KrylovDiag($(kds.n))")
 
 arithmetic_unary_error = QuantumOpticsBase.arithmetic_unary_error
 
@@ -98,17 +99,6 @@ detect_diagstrategy(m::T; _...) where T<:AbstractMatrix = throw(ArgumentError(
     eigenstates(op::Operator[, n::Int; warning=true, kw...])
 
 Calculate the lowest n eigenvalues and their corresponding eigenstates.
-By default `n` is equal to the matrix size for dense matrices; for sparse matrices
-the default value is 6.
-
-This is just a thin wrapper around julia's `LinearAlgebra.eigen` and `KrylovKit.eigsolve`
-functions. Which of them is used depends on the type of the given operator.
-
-If more control about the way the calculation is done is needed, use the method instance 
-with `DiagStrategy`.
-
-NOTE: For AD support with ForwardDiff, this function performs full diagonalization 
-when Dual numbers are detected, as GenericLinearAlgebra does not support restricted ranges.
 """
 function eigenstates(op::AbstractOperator; kw...)
     ds, kwargs_rem = detect_diagstrategy(op; kw...)
@@ -122,8 +112,8 @@ function eigenstates(op::Operator, ds::LapackDiag; warning=true)
     b = basis(op)
     data = op.data
     if ishermitian(op)
+        # AD Fix: Use full eigen for Dual numbers as GenericLinearAlgebra lacks range support
         if eltype(data) <: ForwardDiff.Dual
-            # AD Fix: GenericLinearAlgebra doesn't support the 1:n range
             D, V = eigen(Hermitian(data))
             n_eff = min(ds.n, length(D))
             return D[1:n_eff], [Ket(b, V[:, k]) for k=1:n_eff]
@@ -176,7 +166,8 @@ function eigenenergies(op::Operator, ds::LapackDiag; warning=true)
             n_eff = min(ds.n, length(D))
             return D[1:n_eff]
         else
-            return eigvals(Hermitian(data), 1:ds.n)
+            D = eigvals(Hermitian(data), 1:ds.n)
+            return D
         end
     else
         warning && @warn(nonhermitian_warning)
@@ -195,43 +186,39 @@ eigenenergies(op::Operator, ds::DiagStrategy; kwargs...) = eigenstates(op, ds; k
 Simultaneously diagonalize commuting Hermitian operators specified in `ops`.
 """
 function simdiag(ops::Vector{<:AbstractOperator}; atol::Real=1e-14, rtol::Real=1e-14)
-    # Check input
-    for A in ops
-        ishermitian(A) || error("Non-hermitian operator given!")
+    for A=ops
+        if !ishermitian(A)
+            error("Non-hermitian operator given!")
+        end
     end
 
-    # AD FIX: Sum using generator for proper type promotion
+    # Sum using generator to preserve Dual types during AD
     combined_data = sum(op.data for op in ops)
-    
     if combined_data isa AbstractSparseMatrix
-        # Convert to dense for AD support in eigen routines
         combined_data = Array(combined_data)
     end
     
-    # AD FIX: eigen(Hermitian(...)) is more stable for Dual numbers
-    # GenericLinearAlgebra must be loaded for this to support Duals
+    # Use Hermitian for AD stability; requires GenericLinearAlgebra for Dual support
     d, v = eigen(Hermitian(combined_data))
 
-    # Use 'similar' to preserve Dual types in eigenvalues
-    evals = [similar(d) for _ in ops]
+    # Preserve Dual types in eigenvalues
+    evals = [similar(d, length(d)) for i=1:length(ops)]
     
-    for i in 1:length(ops)
+    for i=1:length(ops)
         op_data = ops[i].data
-        # AD FIX: real.() handles Complex{Dual} -> Real{Dual} conversion
         evals[i] .= real.(diag(v' * op_data * v))
         
-        # AD FIX: Perform verification check on values only. 
-        # Derivatives of eigenvectors are often noisy and trigger false failures.
+        # AD Fix: Verification check on values only to ignore derivative noise
         v_val = ForwardDiff.value.(v)
         op_val = ForwardDiff.value.(op_data)
         ev_val = ForwardDiff.value.(evals[i])
         
         if !isapprox(op_val * v_val, v_val * diagm(ev_val); atol=atol, rtol=rtol)
-            error("Simultaneous diagonalization failed! Operators may not commute.")
+            error("Simultaneous diagonalization failed!")
         end
     end
 
     index = sortperm(real(evals[1][:]))
-    evals_sorted = [real(evals[i][index]) for i in 1:length(ops)]
+    evals_sorted = [real(evals[i][index]) for i=1:length(ops)]
     return evals_sorted, v[:, index]
 end
