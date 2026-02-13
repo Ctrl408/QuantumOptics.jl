@@ -215,32 +215,34 @@ the equation ``A|ψ⟩ = a|ψ⟩``.
 # Change this signature:
 # function simdiag(ops::Vector{T}; atol::Real=1e-14, rtol::Real=1e-14) where T<:DenseOpType
 function simdiag(ops::Vector{<:AbstractOperator}; atol::Real=1e-14, rtol::Real=1e-14)
+    # Check input
     for A=ops
         if !ishermitian(A)
             error("Non-hermitian operator given!")
         end
     end
 
-    # 1. Use a generator to ensure proper type promotion during summation
+    # Use a generator for the sum to ensure proper type promotion for Dual numbers
     combined_data = sum(op.data for op in ops)
     
     if combined_data isa AbstractSparseMatrix
+        # Convert to dense to allow AD to flow through standard eigen routines
         combined_data = Array(combined_data)
     end
     
-    # 2. Use Hermitian to ensure real eigenvalues and better AD support
-    # Ensure 'using GenericLinearAlgebra' is active for Dual support
+    # Use Hermitian to ensure real eigenvalues and improved AD stability
+    # Ensure GenericLinearAlgebra is loaded for Dual support
     d, v = eigen(Hermitian(combined_data))
 
-    # 3. Initialize evals based on d (which will now be Dual if inputs are Dual)
+    # Initialize evals using d to preserve Dual types from the result of eigen()
     evals = [similar(d) for _ in ops]
     
     for i=1:length(ops)
         op_data = ops[i].data
-        # 4. Use real.() to prevent Complex{Dual} -> Real{Dual} conversion errors
+        # Use real.() to strip tiny imaginary parts from the transformation
         evals[i] .= real.(diag(v' * op_data * v))
         
-        # Vectorized check
+        # Internal verification check
         if !isapprox(op_data * v, v * diagm(evals[i]); atol=atol, rtol=rtol)
             error("Simultaneous diagonalization failed!")
         end
