@@ -67,7 +67,7 @@ function qfunc(psi::Ket{B}, xvec::AbstractVector, yvec::AbstractVector) where B<
     end
 
     # 1/sqrt(n!) up to offset for first term in sum
-    nfac = 1.0
+    nfac = one(real(eltype(psi)))
     @inbounds for n=1:N0
         nfac /= sqrt(n)
     end
@@ -424,7 +424,7 @@ function wignersu2(rho::Operator{B,B}, theta::Real, phi::Real) where B<:SpinBasi
 
     ### State decomposition ###
     c = rho.data
-    EVT = Array{ComplexF64}(undef, N,N+1)
+    EVT = Array{promote_type(eltype(c), ComplexF64)}(undef, N, N+1)
     @inbounds for S = 1:N, M = 0:S
         EVT[S,M+1] = conj(sum(BandT[S,M+1].*diag(c,M)))
     end
