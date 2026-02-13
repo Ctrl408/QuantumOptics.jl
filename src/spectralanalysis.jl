@@ -209,7 +209,13 @@ the equation ``A|ψ⟩ = a|ψ⟩``.
         by the eigenvalues of the first operator.
 * `v`: Common eigenvectors.
 """
-function simdiag(ops::Vector{T}; atol::Real=1e-14, rtol::Real=1e-14) where T<:DenseOpType
+
+
+# Change this signature:
+# function simdiag(ops::Vector{T}; atol::Real=1e-14, rtol::Real=1e-14) where T<:DenseOpType
+
+# To this more generic signature:
+function simdiag(ops::Vector{<:AbstractOperator}; atol::Real=1e-14, rtol::Real=1e-14)
     # Check input
     for A=ops
         if !ishermitian(A)
@@ -217,13 +223,22 @@ function simdiag(ops::Vector{T}; atol::Real=1e-14, rtol::Real=1e-14) where T<:De
         end
     end
 
+    # Summing operators works generically; eigen() will dispatch to the 
+    # correct Dual-number aware method automatically.
     d, v = eigen(sum(ops).data)
 
-   # 1. Allocate generically using similar
+    # Use 'similar' to ensure 'evals' can hold Dual numbers
     evals = [similar(d, length(d)) for i=1:length(ops)]
-
+    
+    # PHASE 2: VECTORIZATION
+    # Replace the scalar loop with matrix-matrix multiplication.
+    # This is faster and avoids "Scalar indexing" warnings on GPUs.
     for i=1:length(ops)
+        # Transforming to the common eigenbasis: V' * Op * V
+        # The diagonal elements are the eigenvalues.
         evals[i] .= diag(v' * ops[i].data * v)
+        
+        # Vectorized consistency check
         if !isapprox(ops[i].data * v, v * diagm(evals[i]); atol=atol, rtol=rtol)
             error("Simultaneous diagonalization failed!")
         end
