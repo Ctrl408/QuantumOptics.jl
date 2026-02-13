@@ -1,5 +1,6 @@
 using Arpack
 import KrylovKit: eigsolve
+import SciMLBase
 
 const nonhermitian_warning = "The given operator is not hermitian. If this is due to a numerical error make the operator hermitian first by calculating (x+dagger(x))/2 first."
 
