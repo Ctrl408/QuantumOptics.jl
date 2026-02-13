@@ -2,7 +2,6 @@ using Arpack
 import KrylovKit: eigsolve
 import SciMLBase
 import ForwardDiff
-using SparseArrays, LinearAlgebra
 
 const nonhermitian_warning = "The given operator is not hermitian. If this is due to a numerical error make the operator hermitian first by calculating (x+dagger(x))/2 first."
 
@@ -99,11 +98,17 @@ detect_diagstrategy(m::T; _...) where T<:AbstractMatrix = throw(ArgumentError(
     eigenstates(op::Operator[, n::Int; warning=true, kw...])
 
 Calculate the lowest n eigenvalues and their corresponding eigenstates.
-By default `n` is equal to the matrix size for dense matrices; for sparse matrices 
+By default `n` is equal to the matrix size for dense matrices; for sparse matrices
 the default value is 6.
 
-NOTE: For AD support with ForwardDiff, this function uses full diagonalization 
-when Dual numbers are detected.
+This is just a thin wrapper around julia's `LinearAlgebra.eigen` and `KrylovKit.eigsolve`
+functions. Which of them is used depends on the type of the given operator.
+
+If more control about the way the calculation is done is needed, use the method instance 
+with `DiagStrategy`.
+
+NOTE: For AD support with ForwardDiff, this function performs full diagonalization 
+when Dual numbers are detected, as GenericLinearAlgebra does not support restricted ranges.
 """
 function eigenstates(op::AbstractOperator; kw...)
     ds, kwargs_rem = detect_diagstrategy(op; kw...)
@@ -118,7 +123,7 @@ function eigenstates(op::Operator, ds::LapackDiag; warning=true)
     data = op.data
     if ishermitian(op)
         if eltype(data) <: ForwardDiff.Dual
-            # GenericLinearAlgebra (required for Duals) doesn't support range 1:n
+            # AD Fix: GenericLinearAlgebra doesn't support the 1:n range
             D, V = eigen(Hermitian(data))
             n_eff = min(ds.n, length(D))
             return D[1:n_eff], [Ket(b, V[:, k]) for k=1:n_eff]
@@ -190,29 +195,32 @@ eigenenergies(op::Operator, ds::DiagStrategy; kwargs...) = eigenstates(op, ds; k
 Simultaneously diagonalize commuting Hermitian operators specified in `ops`.
 """
 function simdiag(ops::Vector{<:AbstractOperator}; atol::Real=1e-14, rtol::Real=1e-14)
+    # Check input
     for A in ops
         ishermitian(A) || error("Non-hermitian operator given!")
     end
 
-    # Sum using generator to preserve Dual types for AD
+    # AD FIX: Sum using generator for proper type promotion
     combined_data = sum(op.data for op in ops)
     
     if combined_data isa AbstractSparseMatrix
+        # Convert to dense for AD support in eigen routines
         combined_data = Array(combined_data)
     end
     
-    # GenericLinearAlgebra.jl must be loaded for Dual number support in eigen()
+    # AD FIX: eigen(Hermitian(...)) is more stable for Dual numbers
+    # GenericLinearAlgebra must be loaded for this to support Duals
     d, v = eigen(Hermitian(combined_data))
 
-    # Initialize with 'similar' to preserve Dual types in eigenvalues
+    # Use 'similar' to preserve Dual types in eigenvalues
     evals = [similar(d) for _ in ops]
     
     for i in 1:length(ops)
         op_data = ops[i].data
-        # Use real.() to strip zero imaginary parts often present after basis transform
+        # AD FIX: real.() handles Complex{Dual} -> Real{Dual} conversion
         evals[i] .= real.(diag(v' * op_data * v))
         
-        # AD FIX: Perform verification check on values only.
+        # AD FIX: Perform verification check on values only. 
         # Derivatives of eigenvectors are often noisy and trigger false failures.
         v_val = ForwardDiff.value.(v)
         op_val = ForwardDiff.value.(op_data)
