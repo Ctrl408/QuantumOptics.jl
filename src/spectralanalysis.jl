@@ -1,6 +1,8 @@
 import KrylovKit: eigsolve
+import Arpack: eigs
 
 const nonhermitian_warning = "The given operator is not hermitian. If this is due to a numerical error make the operator hermitian first by calculating (x+dagger(x))/2 first."
+
 
 """
     abstract type DiagStrategy
@@ -251,6 +253,27 @@ the equation ``A|ψ⟩ = a|ψ⟩``.
                   eigenvalues of the first operator.
 * `v`: Common eigenvectors.
 """
+
+
+
+"""
+    simdiag(ops; atol, rtol)
+
+Simultaneously diagonalize commuting Hermitian operators specified in `ops`.
+This is done by diagonalizing the sum of the operators. The eigenvalues are
+computed by ``a = ⟨ψ|A|ψ⟩`` and it is checked whether the eigenvectors fulfill
+the equation ``A|ψ⟩ = a|ψ⟩``.
+
+# Arguments
+* `ops`: Vector of sparse or dense operators.
+* `atol=1e-14`: kwarg of Base.isapprox specifying the tolerance of the approximate check
+* `rtol=1e-14`: kwarg of Base.isapprox specifying the tolerance of the approximate check
+
+# Returns
+* `evals_sorted`: Vector containing all vectors of the eigenvalues sorted by the
+                  eigenvalues of the first operator.
+* `v`: Common eigenvectors.
+"""
 function simdiag(ops::Vector{<:Operator}; atol::Real=1e-14, rtol::Real=1e-14)
     # Check input - handle dual numbers more carefully
     for A in ops
@@ -264,16 +287,29 @@ function simdiag(ops::Vector{<:Operator}; atol::Real=1e-14, rtol::Real=1e-14)
         end
     end
     
-    d, v = eigen(sum(ops).data)
+    sum_op = sum(ops)
+    
+    # Convert sparse to dense for eigen compatibility with dual numbers
+    # GenericLinearAlgebra handles dual numbers in dense matrices
+    if sum_op.data isa SparseMatrixCSC
+        data_matrix = Matrix(sum_op.data)
+    else
+        data_matrix = sum_op.data
+    end
+    
+    d, v = eigen(data_matrix)
     
     # Use eltype to infer the proper type instead of hardcoding ComplexF64
     T = eltype(d)
     evals = [Vector{T}(undef, length(d)) for i=1:length(ops)]
     
+    # Also convert individual operators to dense for matrix multiplication
+    ops_data = [op.data isa SparseMatrixCSC ? Matrix(op.data) : op.data for op in ops]
+    
     for i=1:length(ops), j=1:length(d)
-        vec = ops[i].data*v[:, j]
-        evals[i][j] = (v[:, j]'*vec)[1]
-        if !isapprox(vec, evals[i][j]*v[:, j]; atol=atol, rtol=rtol)
+        vec = ops_data[i] * v[:, j]
+        evals[i][j] = (v[:, j]' * vec)[1]
+        if !isapprox(vec, evals[i][j] * v[:, j]; atol=atol, rtol=rtol)
             error("Simultaneous diagonalization failed!")
         end
     end
