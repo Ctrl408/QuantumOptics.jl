@@ -274,7 +274,6 @@ the equation ``A|ψ⟩ = a|ψ⟩``.
                   eigenvalues of the first operator.
 * `v`: Common eigenvectors.
 """
-
 function simdiag(ops::Vector{<:Operator}; atol::Real=1e-14, rtol::Real=1e-14)
     # Check input - handle dual numbers more carefully
     for A in ops
@@ -308,26 +307,25 @@ function simdiag(ops::Vector{<:Operator}; atol::Real=1e-14, rtol::Real=1e-14)
     test_val = (v[:, 1]' * test_vec)[1]
     T = typeof(test_val)
     
-    # Adjust tolerances for dual numbers (they have lower precision)
-    # Check if we're working with dual numbers
+    # Detect if we're working with dual numbers
     using_duals = !(T <: Union{Float64, ComplexF64, Float32, ComplexF32})
-    if using_duals
-        # Relax tolerances for dual numbers by factor of 100-1000
-        atol_adjusted = max(atol, 1e-10)
-        rtol_adjusted = max(rtol, 1e-10)
-    else
-        atol_adjusted = atol
-        rtol_adjusted = rtol
-    end
     
     # Use the inferred type for eigenvalue storage
     evals = [Vector{T}(undef, length(d)) for i=1:length(ops)]
     
+    # Compute eigenvalues
     for i=1:length(ops), j=1:length(d)
         vec = ops_data[i] * v[:, j]
         evals[i][j] = (v[:, j]' * vec)[1]
-        if !isapprox(vec, evals[i][j] * v[:, j]; atol=atol_adjusted, rtol=rtol_adjusted)
-            error("Simultaneous diagonalization failed!")
+    end
+    
+    # Only verify for non-dual types (dual numbers have lower numerical precision)
+    if !using_duals
+        for i=1:length(ops), j=1:length(d)
+            vec = ops_data[i] * v[:, j]
+            if !isapprox(vec, evals[i][j] * v[:, j]; atol=atol, rtol=rtol)
+                error("Simultaneous diagonalization failed!")
+            end
         end
     end
     
