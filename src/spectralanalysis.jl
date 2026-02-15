@@ -1,8 +1,5 @@
 using Arpack
 import KrylovKit: eigsolve
-import SciMLBase
-import ForwardDiff
-using SparseArrays, LinearAlgebra
 
 const nonhermitian_warning = "The given operator is not hermitian. If this is due to a numerical error make the operator hermitian first by calculating (x+dagger(x))/2 first."
 
@@ -18,7 +15,7 @@ abstract type DiagStrategy end
 """
     LapackDiag <: DiagStrategy
 
-Represents the `LinearAlgebra.eigen` diagonalization routine.
+Represents the `LinearArgebra.eigen` diagonalization routine.
 The only parameter `n` represents the number of (lowest) eigenvectors.
 """
 struct LapackDiag <: DiagStrategy
@@ -35,27 +32,26 @@ struct KrylovDiag{VT} <: DiagStrategy
     v0::VT
     krylovdim::Int
 end
-
 """
     KrylovDiag(n::Int, [v0=nothing, krylovdim::Int=n + 30])
 
 Parameters:
 - `n`: The number of eigenvectors to find
 - `v0`: The starting vector. By default it is `nothing`, which means it will be a random dense
-`Vector`.
-- `krylovdim`: The upper bound for dimension count of the emerging Krylov space.
+`Vector`. This will not work for non-trivial array types like from `CUDA.jl`, so you might want
+to define a new method for the `QuantumOptics.get_starting_vector` function.
+- `krylovdim`: The upper bound for dimenstion count of the emerging Krylov space.
 """
 KrylovDiag(n::Int, v0=nothing) = KrylovDiag(n, v0, n + 30)
 Base.print(io::IO, kds::KrylovDiag) =
     print(io, "KrylovDiag($(kds.n))")
 
 arithmetic_unary_error = QuantumOpticsBase.arithmetic_unary_error
-
 """
     detect_diagstrategy(op::Operator; kw...)
 
 Find a `DiagStrategy` for the given operator; processes the `kw` keyword arguments
-and automatically sets parameters of the resulting `DiagStrategy` object.
+and automatically sets parameters of the resulting `DiagStrategy`object.
 Returns a tuple of the `DiagStrategy` and unprocessed keyword arguments from `kw`.
 """
 function detect_diagstrategy(op::DataOperator; kw...)
@@ -70,12 +66,9 @@ detect_diagstrategy(op::AbstractOperator; kw...) = arithmetic_unary_error("detec
 Generate a default starting vector for Arnoldi-like iterative methods for matrix `m`.
 """
 get_starting_vector(::SparseMatrixCSC) = nothing
-
 function detect_diagstrategy(m::AbstractSparseMatrix; kw...)
     if get(kw, :info, true)
-        @info "Defaulting to sparse diagonalization for sparse operator.
-If storing the full operator is possible, it might be faster to do `eigenstates(dense(op))`.
-Set `info=false` to turn off this message."
+        @info "Defaulting to sparse diagonalization for sparse operator. If storing the full operator is possible, it might be faster to do `eigenstates(dense(op))`. Set `info=false` to turn off this message."
     end
     nev = get(kw, :n, 6)
     v0 = get(kw, :v0, get_starting_vector(m))
@@ -83,13 +76,16 @@ Set `info=false` to turn off this message."
     new_kw = Base.structdiff(values(kw), NamedTuple{(:n, :v0, :krylovdim, :info)})
     return KrylovDiag(nev, v0, krylovdim), new_kw
 end
-
 function detect_diagstrategy(m::Matrix; kw...)
     nev = get(kw, :n, size(m)[1])
     new_kw = Base.structdiff(values(kw), NamedTuple{(:n, :info)})
     return LapackDiag(nev), new_kw
 end
+"""
+    detect_diagstrategy(m::AbstractMatrix; kw...)
 
+Same as above, but dispatches on different internal array types.
+"""
 detect_diagstrategy(m::T; _...) where T<:AbstractMatrix = throw(ArgumentError(
     """Cannot detect DiagStrategy for array type $(typeof(m)).
     Consider defining `QuantumOptics.detect_diagstrategy(::$T; kw...)` method.
@@ -98,39 +94,54 @@ detect_diagstrategy(m::T; _...) where T<:AbstractMatrix = throw(ArgumentError(
 """
     eigenstates(op::Operator[, n::Int; warning=true, kw...])
 
-Calculate the lowest n eigenvalues and their corresponding eigenstates.
+Calculate the lowest n eigenvalues and their corresponding eigenstates. By default `n` is
+equal to the matrix size for dense matrices; for sparse matrices the default value is 6.
+
+This is just a thin wrapper around julia's `LinearArgebra.eigen` and `KrylovKit.eigsolve`
+functions. Which of them is used depends on the type of the given operator. If more control
+about the way the calculation is done is needed, use the method instance with `DiagStrategy`
+(see below).
+
+NOTE: Especially for small systems full diagonalization with Julia's `eigen`
+function is often more desirable. You can convert a sparse operator `A` to a
+dense one using `dense(A)`.
+
+If the given operator is non-hermitian a warning is given. This behavior
+can be turned off using the keyword `warning=false`.
+
+## Optional arguments
+- `n`: It can be a keyword argument too!
+- `v0`: The starting vector for Arnoldi-like iterative methods.
+- `krylovdim`: The upper bound for dimenstion count of the emerging Krylov space.
 """
 function eigenstates(op::AbstractOperator; kw...)
     ds, kwargs_rem = detect_diagstrategy(op; kw...)
     eigenstates(op, ds; kwargs_rem...)
 end
-
 eigenstates(op::AbstractOperator, n::Int; warning=true, kw...) =
     eigenstates(op; warning=warning, kw..., n=n)
 
+"""
+    eigenstates(op::Operator, ds::DiagStrategy[; warning=true, kw...])
+
+Calculate the lowest eigenvalues and their corresponding eigenstates of the `op` operator
+using the `ds` diagonalization strategy. The `kw...` arguments can be passed to the exact
+function that does the diagonalization (like `KrylovKit.eigsolve`).
+"""
 function eigenstates(op::Operator, ds::LapackDiag; warning=true)
     b = basis(op)
-    data = op.data
     if ishermitian(op)
-        # AD Fix: Use full eigen for Dual numbers as GenericLinearAlgebra lacks range support
-        if eltype(data) <: ForwardDiff.Dual
-            D, V = eigen(Hermitian(data))
-            n_eff = min(ds.n, length(D))
-            return D[1:n_eff], [Ket(b, V[:, k]) for k=1:n_eff]
-        else
-            D, V = eigen(Hermitian(data), 1:ds.n)
-            states = [Ket(b, V[:, k]) for k=1:length(D)]
-            return D, states
-        end
+        D, V = eigen(Hermitian(op.data), 1:ds.n)
+        states = [Ket(b, V[:, k]) for k=1:length(D)]
+        return D, states
     else
         warning && @warn(nonhermitian_warning)
-        D, V = eigen(data)
+        D, V = eigen(op.data)
         states = [Ket(b, V[:, k]) for k=1:length(D)]
         perm = sortperm(D, by=real)
         permute!(D, perm)
         permute!(states, perm)
-        n_eff = min(ds.n, length(D))
-        return D[1:n_eff], states[1:n_eff]
+        return D[1:ds.n], states[1:ds.n]
     end
 end
 
@@ -150,70 +161,69 @@ end
     eigenenergies(op::AbstractOperator[, n::Int; warning=true, kwargs...])
 
 Calculate the lowest n eigenvalues of given operator.
+
+If the given operator is non-hermitian a warning is given. This behavior
+can be turned off using the keyword `warning=false`.
+
+See `eigenstates` for more info.
 """
 function eigenenergies(op::AbstractOperator; kw...)
     ds, kw_rem = detect_diagstrategy(op; kw...)
     eigenenergies(op, ds; kw_rem...)
 end
-
 eigenenergies(op::AbstractOperator, n::Int; kw...) = eigenenergies(op; kw..., n=n)
 
 function eigenenergies(op::Operator, ds::LapackDiag; warning=true)
-    data = op.data
     if ishermitian(op)
-        if eltype(data) <: ForwardDiff.Dual
-            D = eigvals(Hermitian(data))
-            n_eff = min(ds.n, length(D))
-            return D[1:n_eff]
-        else
-            D = eigvals(Hermitian(data), 1:ds.n)
-            return D
-        end
+        D = eigvals(Hermitian(op.data), 1:ds.n)
+        return D
     else
         warning && @warn(nonhermitian_warning)
-        D = eigvals(data)
+        D = eigvals(op.data)
         sort!(D, by=real)
-        n_eff = min(ds.n, length(D))
-        return D[1:n_eff]
+        return D[1:ds.n]
     end
 end
 
+# Call eigenstates
 eigenenergies(op::Operator, ds::DiagStrategy; kwargs...) = eigenstates(op, ds; kwargs...)[1]
 
 """
     simdiag(ops; atol, rtol)
 
 Simultaneously diagonalize commuting Hermitian operators specified in `ops`.
+
+This is done by diagonalizing the sum of the operators. The eigenvalues are
+computed by ``a = ⟨ψ|A|ψ⟩`` and it is checked whether the eigenvectors fulfill
+the equation ``A|ψ⟩ = a|ψ⟩``.
+
+# Arguments
+* `ops`: Vector of sparse or dense operators.
+* `atol=1e-14`: kwarg of Base.isapprox specifying the tolerance of the
+        approximate check
+* `rtol=1e-14`: kwarg of Base.isapprox specifying the tolerance of the
+        approximate check
+
+# Returns
+* `evals_sorted`: Vector containing all vectors of the eigenvalues sorted
+        by the eigenvalues of the first operator.
+* `v`: Common eigenvectors.
 """
-function simdiag(ops::Vector{<:AbstractOperator}; atol::Real=1e-14, rtol::Real=1e-14)
+function simdiag(ops::Vector{T}; atol::Real=1e-14, rtol::Real=1e-14) where T<:DenseOpType
+    # Check input
     for A=ops
         if !ishermitian(A)
             error("Non-hermitian operator given!")
         end
     end
 
-    # Sum using generator to preserve Dual types during AD
-    combined_data = sum(op.data for op in ops)
-    if combined_data isa AbstractSparseMatrix
-        combined_data = Array(combined_data)
-    end
-    
-    # Use Hermitian for AD stability; requires GenericLinearAlgebra for Dual support
-    d, v = eigen(Hermitian(combined_data))
+    d, v = eigen(sum(ops).data)
 
-    # Preserve Dual types in eigenvalues
-    evals = [similar(d, length(d)) for i=1:length(ops)]
-    
-    for i=1:length(ops)
-        op_data = ops[i].data
-        evals[i] .= real.(diag(v' * op_data * v))
-        
-        # AD Fix: Verification check on values only to ignore derivative noise
-        v_val = ForwardDiff.value.(v)
-        op_val = ForwardDiff.value.(op_data)
-        ev_val = ForwardDiff.value.(evals[i])
-        
-        if !isapprox(op_val * v_val, v_val * diagm(ev_val); atol=atol, rtol=rtol)
+    evals = [Vector{ComplexF64}(undef, length(d)) for i=1:length(ops)]
+    for i=1:length(ops), j=1:length(d)
+        vec = ops[i].data*v[:, j]
+        evals[i][j] = (v[:, j]'*vec)[1]
+        if !isapprox(vec, evals[i][j]*v[:, j]; atol=atol, rtol=rtol)
             error("Simultaneous diagonalization failed!")
         end
     end
