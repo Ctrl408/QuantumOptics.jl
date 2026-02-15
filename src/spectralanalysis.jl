@@ -299,12 +299,16 @@ function simdiag(ops::Vector{<:Operator}; atol::Real=1e-14, rtol::Real=1e-14)
     
     d, v = eigen(data_matrix)
     
-    # Use eltype to infer the proper type instead of hardcoding ComplexF64
-    T = eltype(d)
-    evals = [Vector{T}(undef, length(d)) for i=1:length(ops)]
-    
     # Also convert individual operators to dense for matrix multiplication
     ops_data = [op.data isa SparseMatrixCSC ? Matrix(op.data) : op.data for op in ops]
+    
+    # Pre-compute one expectation value to determine the actual type we'll get
+    test_vec = ops_data[1] * v[:, 1]
+    test_val = (v[:, 1]' * test_vec)[1]
+    T = typeof(test_val)
+    
+    # Use the inferred type for eigenvalue storage
+    evals = [Vector{T}(undef, length(d)) for i=1:length(ops)]
     
     for i=1:length(ops), j=1:length(d)
         vec = ops_data[i] * v[:, j]
@@ -315,7 +319,13 @@ function simdiag(ops::Vector{<:Operator}; atol::Real=1e-14, rtol::Real=1e-14)
     end
     
     index = sortperm(real(evals[1][:]))
-    evals_sorted = [real(evals[i][index]) for i=1:length(ops)]
+    
+    # Handle both real and complex eigenvalues when extracting real parts
+    if T <: Real
+        evals_sorted = [evals[i][index] for i=1:length(ops)]
+    else
+        evals_sorted = [real.(evals[i][index]) for i=1:length(ops)]
+    end
     
     return evals_sorted, v[:, index]
 end
